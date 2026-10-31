@@ -9,7 +9,7 @@ export function renderMarkdown(text: string): string {
   const blocks: string[] = [];
   let safe = escapeHtml(text);
   safe = safe.replace(/```([\s\S]*?)```/g, (_m, code: string) => {
-    blocks.push(`<pre style="background:#080B10;padding:12px;border-radius:12px;overflow:auto;"><code>${code}</code></pre>`);
+    blocks.push(`<pre><code>${code}</code></pre>`);
     return `\u0000${blocks.length - 1}\u0000`;
   });
   safe = safe
@@ -28,7 +28,7 @@ export function renderMarkdown(text: string): string {
       out.push(`<li>${line.slice(2)}</li>`);
     } else {
       if (inList) { out.push('</ul>'); inList = false; }
-      out.push(line ? `<p style="margin:6px 0;">${line}</p>` : '');
+      out.push(line ? `<p>${line}</p>` : '');
     }
   }
   if (inList) out.push('</ul>');
@@ -37,20 +37,25 @@ export function renderMarkdown(text: string): string {
   return html;
 }
 
-export function MessageBubble({ message, onCopy, onRegenerate }: {
-  message: ChatMessage; onCopy: () => void; onRegenerate?: () => void;
+export function MessageBubble({ message, onCopy, onRegenerate, streaming }: {
+  message: ChatMessage; onCopy: () => void; onRegenerate?: () => void; streaming?: boolean;
 }) {
   const [copied, setCopied] = useState(false);
+  const [showActions, setShowActions] = useState(false);
   return (
-    <div style={{ display: 'flex', justifyContent: message.role === 'user' ? 'flex-end' : 'flex-start' }}>
-      <div className="glass" style={{ maxWidth: '88%', padding: '12px 14px', background: message.role === 'user' ? 'rgba(53,217,255,0.14)' : undefined }}>
-        <div dangerouslySetInnerHTML={{ __html: renderMarkdown(message.text) }} />
-        {message.role === 'assistant' && (
-          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-            <button type="button" className="btn-ghost" style={{ minHeight: 36, padding: '6px 10px' }} onClick={() => { onCopy(); setCopied(true); setTimeout(() => setCopied(false), 1500); }}>
+    <div className={`bubble-row ${message.role}`}>
+      <div className={`bubble ${message.role} ${streaming ? 'streaming' : ''}`}>
+        <div className="md-body" dangerouslySetInnerHTML={{ __html: renderMarkdown(message.text) }} />
+        {message.role === 'assistant' && message.text && (
+          <div className="bubble-actions">
+            <button type="button" onClick={() => { onCopy(); setCopied(true); setTimeout(() => setCopied(false), 1500); }}>
               {copied ? 'Copied' : 'Copy'}
             </button>
-            {onRegenerate && <button type="button" className="btn-ghost" style={{ minHeight: 36, padding: '6px 10px' }} onClick={onRegenerate}>Regenerate</button>}
+            {onRegenerate && <button type="button" onClick={onRegenerate}>Regenerate</button>}
+            <button type="button" aria-expanded={showActions} onClick={() => setShowActions((v) => !v)}>More</button>
+            {showActions && (
+              <span style={{ color: 'var(--muted)', fontSize: 13, alignSelf: 'center' }}>Saved in this conversation on this device.</span>
+            )}
           </div>
         )}
       </div>

@@ -23,6 +23,7 @@ export function App() {
   const [cryptoSession, setCryptoSession] = useState<CryptoSession>({ enabled: false, passphrase: '' });
   const [keyActive, setKeyActive] = useState(false);
   const [pendingMessage, setPendingMessage] = useState('');
+  const [visionRequested, setVisionRequested] = useState(false);
   const [workerUrl, setWorkerUrl] = useState('');
   const [workerRemembered, setWorkerRemembered] = useState(false);
   const [appToken, setAppToken] = useState('');
@@ -79,21 +80,25 @@ export function App() {
 
   return (
     <MotionConfig reducedMotion={reducedMotion ? 'always' : 'user'}>
+      <div className="ambient" aria-hidden="true" />
       <div className="app-shell">
         <aside className="sidebar-col glass-strong" style={{ padding: 14 }}>
           <Sidebar section={section} onChange={setSection} />
         </aside>
-        <main className="content-pad" style={{ padding: '20px 16px', maxWidth: 900, margin: '0 auto', width: '100%' }}>
+        <main className={`content-pad ${section === 'chat' ? 'chat-pad' : ''}`}>
           <AnimatePresence mode="wait">
-            <motion.div key={section} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} transition={{ duration: 0.2 }}>
+            <motion.div key={section} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} transition={{ duration: 0.22, ease: 'easeOut' }}>
               {section === 'home' && (
-                <Home store={store} octoState={octoState} keyActive={keyActive} model={settings.model}
+                <Home store={store} octoState={octoState} keyActive={keyActive} model={settings.model} workerStatus={workerStatus}
                   onQuickAsk={(text) => { setPendingMessage(text); setSection('chat'); }}
-                  onGoChat={() => setSection('chat')} onGoWorkspace={() => setSection('workspace')} />
+                  onGoChat={() => setSection('chat')}
+                  onGoVision={() => { setVisionRequested(true); setSection('chat'); }}
+                  onGoWorkspace={() => setSection('workspace')} />
               )}
               {section === 'chat' && (
                 <Chat store={store} model={settings.model} defaultMode={defaultMode} onStateChange={setState}
                   pendingMessage={pendingMessage} onPendingConsumed={() => setPendingMessage('')}
+                  visionRequested={visionRequested} onVisionConsumed={() => setVisionRequested(false)}
                   workerUrl={workerUrl} workerActive={workerStatus === 'Worker connected'} appToken={appToken} />
               )}
               {section === 'workspace' && <Workspace store={store} />}
@@ -111,9 +116,11 @@ export function App() {
               )}
             </motion.div>
           </AnimatePresence>
-          <p style={{ color: 'var(--secondary)', fontSize: 12, textAlign: 'center', marginTop: 24 }}>
-            OCTO stores data on this device in IndexedDB. AI chat needs your own Gemini key in Settings. Offline AI responses are not available.
-          </p>
+          {section !== 'chat' && (
+            <p style={{ color: 'var(--muted)', fontSize: 12.5, textAlign: 'center', marginTop: 26, lineHeight: 1.5 }}>
+              OCTO stores data on this device in IndexedDB. AI chat needs your own Gemini key in Settings, or a connected Worker backend.
+            </p>
+          )}
         </main>
         <div className="bottom-nav">
           <BottomTabBar section={section} onChange={setSection} />

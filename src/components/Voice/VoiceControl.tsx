@@ -4,12 +4,13 @@ import { speak, startRecognition, stopSpeaking, voiceSupport } from '../../servi
 
 export type VoiceMode = 'push' | 'continuous';
 
-export function VoiceControl({ onTranscript, onStateChange, speakText, continuous, onContinuousChange }: {
+export function VoiceControl({ onTranscript, onStateChange, speakText, continuous, onContinuousChange, compact }: {
   onTranscript: (text: string) => void;
   onStateChange: (listening: boolean, speaking: boolean) => void;
   speakText?: string;
   continuous: boolean;
   onContinuousChange: (on: boolean) => void;
+  compact?: boolean;
 }) {
   const [listening, setListening] = useState(false);
   const [speaking, setSpeaking] = useState(false);
@@ -60,6 +61,17 @@ export function VoiceControl({ onTranscript, onStateChange, speakText, continuou
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [speakText]);
 
+  if (compact) {
+    return (
+      <span>
+        <button type="button" className="icon-btn" aria-label={listening ? 'Stop listening' : 'Push to talk'} disabled={!support.recognition}
+          onClick={() => (listening ? stopAll() : startListening())} style={listening ? { background: 'rgba(53,217,255,0.22)', borderColor: 'rgba(53,217,255,0.5)', color: 'var(--ice)' } : undefined}>
+          <Icon name="mic" size={22} label="Microphone" />
+        </button>
+        {error && <span role="alert" style={{ color: '#ff9a9a', fontSize: 13 }}>{error}</span>}
+      </span>
+    );
+  }
   return (
     <div>
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>

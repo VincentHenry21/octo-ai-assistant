@@ -14,6 +14,13 @@ const paths: Record<string, JSX.Element> = {
   check: <path d="M4 12.5 9.5 18 20 6.5" />,
   search: <path d="M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zm10 17-5-5" />,
   core: <><circle cx="12" cy="12" r="3" /><circle cx="12" cy="12" r="8" /><circle cx="12" cy="5" r="1.4" /><circle cx="19" cy="12" r="1.4" /><circle cx="12" cy="19" r="1.4" /><circle cx="5" cy="12" r="1.4" /></>,
+  camera: <><path d="M4 8h3l2-2h6l2 2h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z" /><circle cx="12" cy="13" r="3.5" /></>,
+  avatar: <><circle cx="12" cy="8" r="3.5" /><path d="M5 20c1.5-3.5 4-5 7-5s5.5 1.5 7 5" /></>,
+  eye: <><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12z" /><circle cx="12" cy="12" r="3" /></>,
+  more: <><circle cx="5" cy="12" r="1.5" /><circle cx="12" cy="12" r="1.5" /><circle cx="19" cy="12" r="1.5" /></>,
+  close: <path d="M6 6l12 12M18 6L6 18" />,
+  flip: <><path d="M4 8h13l-3-3M20 16H7l3 3" /></>,
+  bolt: <path d="M13 2 5 14h6l-1 8 8-12h-6z" />,
 };
 
 export function Icon({ name, size = 22, label }: { name: keyof typeof paths; size?: number; label?: string }) {

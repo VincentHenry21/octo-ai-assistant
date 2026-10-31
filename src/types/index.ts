@@ -1,4 +1,4 @@
-export type OctoState = 'IDLE' | 'LISTENING' | 'THINKING' | 'RESPONDING' | 'EXECUTING' | 'ERROR';
+export type OctoState = 'IDLE' | 'LISTENING' | 'THINKING' | 'RESPONDING' | 'EXECUTING' | 'VISION_ACTIVE' | 'ERROR';
 export type Section = 'home' | 'chat' | 'workspace' | 'memory' | 'settings';
 export type MemoryCategory = 'personal preferences' | 'user-provided facts' | 'projects' | 'professional context' | 'goals' | 'important instructions';
 
