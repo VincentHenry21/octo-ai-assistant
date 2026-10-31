@@ -80,7 +80,7 @@ export default {
         countError();
         return withCors(jsonError('Chat request must contain 1 to 50 messages.', 'INVALID_REQUEST', 400, request, env, 'Send a valid chat request from OCTO.'));
       }
-      const model = typeof body.model === 'string' && (MODEL_ALLOWLIST as readonly string[]).includes(body.model) ? body.model : 'gemini-2.5-flash';
+      const model = typeof body.model === 'string' && (MODEL_ALLOWLIST as readonly string[]).includes(body.model) ? body.model : 'gemini-3.8-flash';
       const turns: { role: 'user' | 'model'; text: string }[] = [];
       for (const m of body.messages) {
         if (!m || typeof m !== 'object') { countError(); return withCors(jsonError('Each message must be an object with role and text.', 'INVALID_REQUEST', 400, request, env)); }

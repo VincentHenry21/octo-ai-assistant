@@ -56,7 +56,7 @@ export async function streamGeminiChat(apiKey: string, model: string, turns: Cha
 
 export async function analyzeImage(apiKey: string, imageBase64: string, mimeType: string): Promise<{ ok: boolean; text?: string; error?: GeminiError }> {
   const prompt = 'Describe this image in plain language. List the main objects you can see, read any visible text (OCR), and explain the scene. Do not invent objects or text that are not visible. If text is unclear, say so.';
-  const result = await geminiPost(apiKey, 'models/gemini-2.5-flash:generateContent', {
+  const result = await geminiPost(apiKey, 'models/gemini-3.8-flash:generateContent', {
     contents: [{ parts: [{ text: prompt }, { inline_data: { mime_type: mimeType, data: imageBase64 } }] }],
     generationConfig: { temperature: 0.4, maxOutputTokens: 2048 },
   });

@@ -21,6 +21,6 @@ export interface UsageCounts {
   errors: number;
   startedAt: string;
 }
-export const MODEL_ALLOWLIST = ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash'] as const;
+export const MODEL_ALLOWLIST = ['gemini-3.8-flash', 'gemini-3.1-pro-preview'] as const;
 export const LIVE_MODEL = 'gemini-2.5-flash-native-audio-preview-12-2025';
 export const SYSTEM_IDENTITY = 'You are OCTO, an intelligent personal AI assistant. You are analytical, thoughtful, calm, proactive when appropriate, and precise. You communicate naturally. You help the user think, plan, organize, research, and execute tasks through authorized tools. You distinguish between suggestions and completed actions. Never claim to have performed an action unless its execution has been confirmed. Never invent personal memories or access to external services.';
