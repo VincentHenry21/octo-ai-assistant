@@ -26,9 +26,9 @@ export interface OctoSettings {
   appearance: 'dark';
 }
 export const DEFAULT_SETTINGS: OctoSettings = {
-  model: 'gemini-3.8-flash', voiceEnabled: true, voiceRate: 1, encryptionEnabled: false, appearance: 'dark',
+  model: 'gemini-3.1-flash-lite', voiceEnabled: true, voiceRate: 1, encryptionEnabled: false, appearance: 'dark',
 };
-export const MODEL_ALLOWLIST = ['gemini-3.1-flash-lite', 'gemini-3-flash-preview', 'gemini-3-flash', 'gemini-3.7-flash', 'gemini-3.8-flash', 'gemini-3.1-pro-preview'] as const;
+export const MODEL_ALLOWLIST = ['gemini-3.1-flash-lite', 'gemini-3-flash-preview'] as const;
 export const MEMORY_CATEGORIES: MemoryCategory[] = [
   'personal preferences', 'user-provided facts', 'projects', 'professional context', 'goals', 'important instructions',
 ];
