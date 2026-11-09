@@ -1,0 +1,7 @@
+name = "tazaungdaing-ticket-sync"
+main = "worker.js"
+compatibility_date = "2025-03-01"
+
+[[kv_namespaces]]
+binding = "TICKETS"
+id = "5ccef18ed76540db887d9527a13a8841"
