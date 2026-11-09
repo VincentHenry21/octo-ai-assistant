@@ -124,3 +124,5 @@ export default {
     return json({ ok: false, error: 'unknown endpoint' }, 404, origin);
   },
 };
+
+// Deploy note: shipped via Workers Builds from Git.
