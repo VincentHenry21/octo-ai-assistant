@@ -1,7 +1,7 @@
 // Tazaungdaing ticket sync Worker (Cloudflare Worker + KV)
 // KV binding: TICKETS (KV namespace "tazaungdaing-tickets")
 // Secret: TICKET_PIN (set in the Cloudflare dashboard, never in code)
-// Data: ticket:<ID> -> JSON {id, buyer, phone, cashback, status, issuedAt, redeemedAt, updatedAt}
+// Data: ticket:<ID> -> JSON {id, buyer, phone, cashback, status, issuedAt, redeemedAt, updatedAt, entries, entriesUsed, price}
 // The app sends the PIN the user typed to unlock the app in the x-ticket-pin header.
 
 const ALLOWED_ORIGINS = ['https://vincenthenry21.github.io'];
@@ -31,8 +31,15 @@ function validId(id) {
   return typeof id === 'string' && /^NMA-TZF26-[A-Z0-9]{6}$/.test(id);
 }
 
+function numField(v, def, min, max) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return def;
+  return Math.max(min, Math.min(max, Math.round(n)));
+}
+
 function cleanTicket(t) {
   if (!t || !validId(t.id)) return null;
+  const entries = numField(t.entries, 1, 1, 10);
   return {
     id: t.id,
     buyer: String(t.buyer || ''),
@@ -42,15 +49,25 @@ function cleanTicket(t) {
     issuedAt: t.issuedAt || null,
     redeemedAt: t.redeemedAt || null,
     updatedAt: t.updatedAt || Date.now(),
+    entries,
+    entriesUsed: numField(t.entriesUsed, 0, 0, entries),
+    price: numField(t.price, 10000, 0, 10000000),
   };
 }
 
-// Redeemed always wins over waiting. Same status: the fresher record wins.
+// Redeemed always wins over waiting. Same status: the fresher record wins,
+// except entries used only ever grows, so the higher count wins.
 function mergeTicket(server, incoming) {
   if (!server) return incoming;
   if (server.status === 'redeemed' && incoming.status !== 'redeemed') return server;
   if (incoming.status === 'redeemed' && server.status !== 'redeemed') return incoming;
-  return (incoming.updatedAt || 0) >= (server.updatedAt || 0) ? incoming : server;
+  const base = (incoming.updatedAt || 0) >= (server.updatedAt || 0) ? incoming : server;
+  return {
+    ...base,
+    entries: Math.max(server.entries || 1, incoming.entries || 1),
+    entriesUsed: Math.max(server.entriesUsed || 0, incoming.entriesUsed || 0),
+    price: Math.max(server.price || 10000, incoming.price || 10000),
+  };
 }
 
 export default {
