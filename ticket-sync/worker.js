@@ -2,6 +2,8 @@
 // KV binding: TICKETS (KV namespace "tazaungdaing-tickets")
 // Secret: TICKET_PIN (set in the Cloudflare dashboard, never in code)
 // Data: ticket:<ID> -> JSON {id, buyer, phone, cashback, status, issuedAt, redeemedAt, updatedAt, entries, entriesUsed, price}
+// Deleted IDs are kept in KV key "deleted-ids" (a JSON array) so a device
+// that still holds a deleted ticket in localStorage cannot re-upload it.
 // The app sends the PIN the user typed to unlock the app in the x-ticket-pin header.
 
 const ALLOWED_ORIGINS = ['https://vincenthenry21.github.io'];
@@ -70,6 +72,26 @@ function mergeTicket(server, incoming) {
   };
 }
 
+// IDs of tickets that were deleted. A device that still holds one of these
+// in localStorage must not be able to re-upload it.
+async function getDeleted(env) {
+  const raw = await env.TICKETS.get('deleted-ids');
+  if (!raw) return new Set();
+  try {
+    const arr = JSON.parse(raw);
+    return new Set(Array.isArray(arr) ? arr.filter((x) => typeof x === 'string') : []);
+  } catch (e) {
+    return new Set();
+  }
+}
+
+async function addDeleted(env, id) {
+  const set = await getDeleted(env);
+  set.add(id);
+  await env.TICKETS.put('deleted-ids', JSON.stringify([...set]));
+  return set;
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -96,12 +118,15 @@ export default {
         try { out.push(JSON.parse(v)); } catch (e) { /* skip bad record */ }
       }
       out.sort((a, b) => String(a.issuedAt || '').localeCompare(String(b.issuedAt || '')));
-      return json({ ok: true, tickets: out }, 200, origin);
+      const deleted = await getDeleted(env);
+      return json({ ok: true, tickets: out, deleted: [...deleted] }, 200, origin);
     }
 
     if (request.method === 'POST' && url.pathname === '/tickets') {
       const t = cleanTicket(await request.json().catch(() => null));
       if (!t) return json({ ok: false, error: 'bad ticket' }, 400, origin);
+      const deleted = await getDeleted(env);
+      if (deleted.has(t.id)) return json({ ok: false, error: 'deleted' }, 200, origin);
       const cur = await env.TICKETS.get('ticket:' + t.id);
       const merged = mergeTicket(cur ? JSON.parse(cur) : null, t);
       await env.TICKETS.put('ticket:' + t.id, JSON.stringify(merged));
@@ -111,16 +136,28 @@ export default {
     if (request.method === 'POST' && url.pathname === '/sync') {
       const body = await request.json().catch(() => null);
       const arr = Array.isArray(body && body.tickets) ? body.tickets : [];
+      const deleted = await getDeleted(env);
       let saved = 0;
+      let skipped = 0;
       for (const raw of arr) {
         const t = cleanTicket(raw);
         if (!t) continue;
+        if (deleted.has(t.id)) { skipped += 1; continue; }
         const cur = await env.TICKETS.get('ticket:' + t.id);
         const merged = mergeTicket(cur ? JSON.parse(cur) : null, t);
         await env.TICKETS.put('ticket:' + t.id, JSON.stringify(merged));
         saved += 1;
       }
-      return json({ ok: true, saved }, 200, origin);
+      return json({ ok: true, saved, skipped }, 200, origin);
+    }
+
+    if (request.method === 'POST' && url.pathname === '/delete') {
+      const body = await request.json().catch(() => null);
+      const id = body && body.id;
+      if (!validId(id)) return json({ ok: false, error: 'bad id' }, 400, origin);
+      await env.TICKETS.delete('ticket:' + id);
+      const set = await addDeleted(env, id);
+      return json({ ok: true, deleted: [...set] }, 200, origin);
     }
 
     if (request.method === 'POST' && url.pathname === '/redeem') {
