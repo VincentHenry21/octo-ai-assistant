@@ -5,7 +5,9 @@
 // stored, never the PIN itself. The client keeps a token (name + hash) and
 // sends it back in the x-l3arn-token header on progress calls.
 // Progress shape (per subject, namespaced):
-//   { active:"teamproject", subjects:{ teamproject:{known,quizBest,lastQuiz,notes,streak}, ... } }
+//   { active:"teamproject", subjects:{ teamproject:{known,quizBest,lastQuiz,notes,streak}, ... },
+//     playlist:[videoId], watchHistory:[{videoId,at}],
+//     profile:{ name, gender:"male"|"female"|null, academicYear:1-4, picture:data:image/jpeg;base64 } }
 // Each subject value keeps the original flat shape:
 //   {known:{cardIndex:true}, quizBest:{score,total},
 //    lastQuiz:{score,total,at}, notes:[{id,text,at}], streak:{count,lastDay}}
@@ -108,24 +110,72 @@ function cleanSubject(p) {
   return { known, quizBest, lastQuiz, notes, streak };
 }
 
+// Clean and validate the profile object. Unknown fields are dropped.
+// The picture is a small client-side resized JPEG data URL (200x200), capped
+// at 150,000 characters so one account stays light in KV.
+function cleanProfile(p) {
+  const d = { name: '', gender: null, academicYear: 1, picture: null };
+  if (!p || typeof p !== 'object') return d;
+  if (typeof p.name === 'string') d.name = p.name.slice(0, 40);
+  if (p.gender === 'male' || p.gender === 'female') d.gender = p.gender;
+  d.academicYear = numField(p.academicYear, 1, 1, 4);
+  if (typeof p.picture === 'string' && p.picture.startsWith('data:image/') && p.picture.length <= 150000) {
+    d.picture = p.picture;
+  }
+  return d;
+}
+
+// Clean a list of saved YouTube video ids (max 100, de-duplicated).
+function cleanVideoList(v) {
+  if (!Array.isArray(v)) return [];
+  const seen = new Set();
+  const out = [];
+  for (const id of v.slice(0, 100)) {
+    if (typeof id !== 'string' || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id.slice(0, 32));
+  }
+  return out;
+}
+
+// Clean the watch history (max 200 entries, newest first).
+function cleanHistory(h) {
+  if (!Array.isArray(h)) return [];
+  const out = [];
+  for (const item of h.slice(0, 200)) {
+    if (!item || typeof item.videoId !== 'string') continue;
+    out.push({
+      videoId: item.videoId.slice(0, 32),
+      at: typeof item.at === 'string' ? item.at.slice(0, 40) : new Date().toISOString(),
+    });
+  }
+  return out;
+}
+
 // Clean and validate the whole per-subject store. Unknown fields are dropped.
 function cleanProgress(p) {
   if (!p || typeof p !== 'object') {
     const subjects = {};
     for (const id of SUBJECT_IDS) subjects[id] = emptySubjectProgress();
-    return { active: 'teamproject', subjects };
+    return { active: 'teamproject', subjects, playlist: [], watchHistory: [], profile: cleanProfile(null) };
   }
   if (p.subjects && typeof p.subjects === 'object') {
     const subjects = {};
     for (const id of SUBJECT_IDS) subjects[id] = cleanSubject(p.subjects[id]);
     const active = typeof p.active === 'string' && subjects[p.active] ? p.active : 'teamproject';
-    return { active, subjects };
+    return {
+      active,
+      subjects,
+      playlist: cleanVideoList(p.playlist),
+      watchHistory: cleanHistory(p.watchHistory),
+      profile: cleanProfile(p.profile),
+    };
   }
   // Old flat shape: it is Unit 8's progress.
   const subjects = {};
   for (const id of SUBJECT_IDS) subjects[id] = emptySubjectProgress();
   subjects.teamproject = cleanSubject(p);
-  return { active: 'teamproject', subjects };
+  return { active: 'teamproject', subjects, playlist: [], watchHistory: [], profile: cleanProfile(null) };
 }
 
 // Verify the token and return the normalized account name, or null.
