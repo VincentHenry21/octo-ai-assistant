@@ -19,7 +19,12 @@
 //     customSubjects:[{id, name, course}] (user-added subjects, max 50) }
 // Each subject value keeps the original flat shape:
 //   {known:{cardIndex:true}, quizBest:{score,total},
-//    lastQuiz:{score,total,at}, notes:[note], streak:{count,lastDay}}
+//    lastQuiz:{score,total,at}, notes:[note], streak:{count,lastDay},
+//    studySeconds:0 (ranking), uploaded:{cards:[{q,a}], lesson, sourceName, at}|null,
+//    uploadedKnown:{cardIndex:true}}
+// AI generation: POST /api/generate {text, subject} turns uploaded PDF or
+// textbook text (max 8000 chars) into up to 12 flashcards plus a lesson,
+// using the same GEMINI_API_KEY secret. Rate limited to 5 per minute per IP.
 // A note is either the old plain-text shape {id,text,at} or the new block shape
 //   {id,title,blocks:[{id,type:"h1"|"p"|"bullet"|"number"|"check"|"divider",text,checked}],
 //    drawing:data:image/png;base64 (capped 120000 chars), grid:true|false, at, updatedAt}
@@ -76,12 +81,12 @@ function numField(v, def, min, max) {
 const SUBJECT_IDS = ['teamproject', 'entrepreneurship', 'marketing', 'finance'];
 
 function emptySubjectProgress() {
-  return { known: {}, quizBest: null, lastQuiz: null, notes: [], streak: { count: 0, lastDay: null } };
+  return { known: {}, quizBest: null, lastQuiz: null, notes: [], streak: { count: 0, lastDay: null }, studySeconds: 0, uploaded: null, uploadedKnown: {} };
 }
 
 // Clean and validate one subject's progress object. Unknown fields are dropped.
 function cleanSubject(p) {
-  if (!p || typeof p !== 'object') return { known: {}, quizBest: null, lastQuiz: null, notes: [], streak: { count: 0, lastDay: null } };
+  if (!p || typeof p !== 'object') return { known: {}, quizBest: null, lastQuiz: null, notes: [], streak: { count: 0, lastDay: null }, studySeconds: 0, uploaded: null, uploadedKnown: {} };
   const known = {};
   if (p.known && typeof p.known === 'object') {
     for (const k of Object.keys(p.known)) {
@@ -141,7 +146,37 @@ function cleanSubject(p) {
       lastDay: typeof p.streak.lastDay === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(p.streak.lastDay) ? p.streak.lastDay : null,
     };
   }
-  return { known, quizBest, lastQuiz, notes, streak };
+  // Study time (seconds) for the ranking system, and uploaded AI material
+  // (flashcards + lesson generated from a PDF or textbook the user uploaded).
+  let studySeconds = 0;
+  if (typeof p.studySeconds === 'number' && Number.isFinite(p.studySeconds)) {
+    studySeconds = Math.max(0, Math.min(99999999, Math.floor(p.studySeconds)));
+  }
+  let uploaded = null;
+  if (p.uploaded && typeof p.uploaded === 'object') {
+    const cards = [];
+    if (Array.isArray(p.uploaded.cards)) {
+      for (const c of p.uploaded.cards.slice(0, 12)) {
+        if (!c || typeof c !== 'object') continue;
+        if (typeof c.q !== 'string' || typeof c.a !== 'string') continue;
+        cards.push({ q: c.q.slice(0, 300), a: c.a.slice(0, 600) });
+      }
+    }
+    uploaded = {
+      cards,
+      lesson: typeof p.uploaded.lesson === 'string' ? p.uploaded.lesson.slice(0, 6000) : '',
+      sourceName: typeof p.uploaded.sourceName === 'string' ? p.uploaded.sourceName.slice(0, 120) : '',
+      at: typeof p.uploaded.at === 'string' ? p.uploaded.at.slice(0, 40) : new Date().toISOString(),
+    };
+  }
+  const uploadedKnown = {};
+  if (p.uploadedKnown && typeof p.uploadedKnown === 'object') {
+    for (const k of Object.keys(p.uploadedKnown)) {
+      const i = Number(k);
+      if (Number.isInteger(i) && i >= 0 && i < 12 && p.uploadedKnown[k]) uploadedKnown[i] = true;
+    }
+  }
+  return { known, quizBest, lastQuiz, notes, streak, studySeconds, uploaded, uploadedKnown };
 }
 
 // Clean and validate the profile object. Unknown fields are dropped.
@@ -279,6 +314,19 @@ function aiRateLimited(ip) {
   return false;
 }
 
+// Generation (PDF/textbook upload) is heavier, so it gets its own stricter
+// limit: 5 requests per minute per IP.
+const GEN_RATE = new Map();
+function genRateLimited(ip) {
+  const now = Date.now();
+  const recent = (GEN_RATE.get(ip) || []).filter((ts) => now - ts < 60000);
+  if (recent.length >= 5) return true;
+  recent.push(now);
+  GEN_RATE.set(ip, recent);
+  if (GEN_RATE.size > 5000) GEN_RATE.clear();
+  return false;
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -406,6 +454,91 @@ export default {
         return json({ ok: false, error: 'upstream' }, 502, origin);
       }
       return json({ ok: true, answer: answer.slice(0, 8000) }, 200, origin);
+    }
+
+    // Turn uploaded study material (PDF or textbook text) into flashcards and
+    // a lesson. POST {text, subject} -> {ok, cards:[{q,a}], lesson}.
+    // The client caps the text at 8000 characters before sending it.
+    if (url.pathname === '/api/generate') {
+      if (request.method !== 'POST') {
+        return json({ ok: false, error: 'method not allowed' }, 405, origin);
+      }
+      const body = await request.json().catch(() => null);
+      const apiKey = (env.GEMINI_API_KEY || '').trim();
+      if (body && body.status === true) {
+        return json({ ok: true, configured: apiKey.length > 0 }, 200, origin);
+      }
+      if (!apiKey) {
+        return json({ ok: false, error: 'not_configured' }, 200, origin);
+      }
+      const text = body && typeof body.text === 'string' ? body.text.trim() : '';
+      const subject = body && typeof body.subject === 'string' ? body.subject.trim().slice(0, 80) : '';
+      if (!text) {
+        return json({ ok: false, error: 'empty text' }, 400, origin);
+      }
+      if (text.length > 8000) {
+        return json({ ok: false, error: 'text too long' }, 400, origin);
+      }
+      const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+      if (genRateLimited(ip)) {
+        return json({ ok: false, error: 'rate_limited' }, 429, origin);
+      }
+      const prompt =
+        'You are a study tutor for a BBA Year 1 student at a college in Myanmar. ' +
+        'Turn the study material below into flashcards and a short lesson. Reply with JSON only, ' +
+        'no other text: {"cards": [{"q": "...", "a": "..."}], "lesson": "..."}. ' +
+        'Make at most 12 flashcards. Each question is one clear question, each answer is one or two ' +
+        'short sentences in plain simple English. The lesson is a short summary of the material in ' +
+        'plain simple English, under 500 words, with the key points. Only use facts from the material ' +
+        'below; do not invent facts. If the material is short or unclear, still make the best ' +
+        'flashcards you can from what is there.\n\n' +
+        'Subject: ' + (subject || 'General') + '\n\nMaterial:\n' + text;
+      let res;
+      try {
+        res = await fetch(
+          'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent',
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: prompt }] }],
+              generationConfig: { maxOutputTokens: 2048, temperature: 0.5, responseMimeType: 'application/json' },
+            }),
+          }
+        );
+      } catch (e) {
+        return json({ ok: false, error: 'upstream' }, 502, origin);
+      }
+      if (!res.ok) {
+        return json({ ok: false, error: 'upstream' }, 502, origin);
+      }
+      const data = await res.json().catch(() => null);
+      let raw = '';
+      try {
+        const parts = data && data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts;
+        if (Array.isArray(parts)) raw = parts.map((p) => p.text || '').join('');
+      } catch (e) { raw = ''; }
+      if (!raw) {
+        return json({ ok: false, error: 'upstream' }, 502, origin);
+      }
+      // Tolerate a fenced code block around the JSON.
+      const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
+      let parsed = null;
+      try { parsed = JSON.parse(cleaned); } catch (e) { parsed = null; }
+      if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.cards) || parsed.cards.length === 0) {
+        return json({ ok: false, error: 'bad output' }, 502, origin);
+      }
+      const cards = [];
+      for (const c of parsed.cards.slice(0, 12)) {
+        if (!c || typeof c.q !== 'string' || typeof c.a !== 'string') continue;
+        if (!c.q.trim() || !c.a.trim()) continue;
+        cards.push({ q: c.q.trim().slice(0, 300), a: c.a.trim().slice(0, 600) });
+      }
+      if (cards.length === 0) {
+        return json({ ok: false, error: 'bad output' }, 502, origin);
+      }
+      const lesson = typeof parsed.lesson === 'string' ? parsed.lesson.slice(0, 6000) : '';
+      return json({ ok: true, cards, lesson }, 200, origin);
     }
 
     return json({ ok: false, error: 'unknown endpoint' }, 404, origin);
