@@ -17,7 +17,10 @@
 //     profile:{ name, gender:"male"|"female"|null, academicYear:1-4, picture:data:image/jpeg;base64 } }
 // Each subject value keeps the original flat shape:
 //   {known:{cardIndex:true}, quizBest:{score,total},
-//    lastQuiz:{score,total,at}, notes:[{id,text,at}], streak:{count,lastDay}}
+//    lastQuiz:{score,total,at}, notes:[note], streak:{count,lastDay}}
+// A note is either the old plain-text shape {id,text,at} or the new block shape
+//   {id,title,blocks:[{id,type:"h1"|"p"|"bullet"|"number"|"check"|"divider",text,checked}],
+//    drawing:data:image/png;base64 (capped 120000 chars), grid:true|false, at, updatedAt}
 // Backward compatible: a flat old-shape object is treated as Unit 8 (teamproject) progress.
 
 const ALLOWED_ORIGINS = ['https://vincenthenry21.github.io', 'https://muse.ai'];
@@ -99,12 +102,34 @@ function cleanSubject(p) {
   const notes = [];
   if (Array.isArray(p.notes)) {
     for (const n of p.notes.slice(0, 100)) {
-      if (!n || typeof n.text !== 'string') continue;
-      notes.push({
-        id: typeof n.id === 'string' ? n.id.slice(0, 40) : ('n' + Math.random().toString(36).slice(2, 10)),
-        text: n.text.slice(0, 2000),
-        at: typeof n.at === 'string' ? n.at.slice(0, 40) : new Date().toISOString(),
-      });
+      if (!n || typeof n !== 'object') continue;
+      const nid = typeof n.id === 'string' ? n.id.slice(0, 40) : ('n' + Math.random().toString(36).slice(2, 10));
+      const nat = typeof n.at === 'string' ? n.at.slice(0, 40) : new Date().toISOString();
+      const nupd = typeof n.updatedAt === 'string' ? n.updatedAt.slice(0, 40) : nat;
+      // Block note (new shape): headings, paragraphs, lists, checkboxes, dividers,
+      // plus an optional drawing (data URL, capped) and the grid-paper flag.
+      if (Array.isArray(n.blocks)) {
+        const blocks = [];
+        for (const b of n.blocks.slice(0, 100)) {
+          if (!b || typeof b !== 'object') continue;
+          const type = ['h1', 'p', 'bullet', 'number', 'check', 'divider'].includes(b.type) ? b.type : 'p';
+          blocks.push({
+            id: typeof b.id === 'string' ? b.id.slice(0, 40) : ('b' + Math.random().toString(36).slice(2, 10)),
+            type,
+            text: typeof b.text === 'string' ? b.text.slice(0, 2000) : '',
+            checked: type === 'check' ? !!b.checked : false,
+          });
+        }
+        const note = { id: nid, blocks, at: nat, updatedAt: nupd };
+        if (typeof n.title === 'string') note.title = n.title.slice(0, 120);
+        if (typeof n.drawing === 'string' && n.drawing.startsWith('data:image/') && n.drawing.length <= 120000) note.drawing = n.drawing;
+        if (typeof n.grid === 'boolean') note.grid = n.grid;
+        notes.push(note);
+        continue;
+      }
+      // Old plain-text note: keep as is.
+      if (typeof n.text !== 'string') continue;
+      notes.push({ id: nid, text: n.text.slice(0, 2000), at: nat });
     }
   }
   let streak = { count: 0, lastDay: null };
