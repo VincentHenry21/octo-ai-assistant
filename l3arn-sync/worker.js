@@ -1,9 +1,14 @@
 // L3ARN sync Worker (Cloudflare Worker + KV)
 // KV binding: L3ARN_STORE (KV namespace "tazaungdaing-tickets", reused)
 // L3ARN data lives under keys prefixed "l3arn:" so it never collides with ticket data.
-// Auth: a display name plus a 4-digit PIN. Only a SHA-256 hash of the PIN is
-// stored, never the PIN itself. The client keeps a token (name + hash) and
-// sends it back in the x-l3arn-token header on progress calls.
+// Auth: a display name, a unique username, an age, and a 4-digit PIN.
+// Only a SHA-256 hash of the PIN is stored, never the PIN itself. Sign-in
+// checks all three: the PIN, the name, and the username must match the
+// account stored under that username. The client keeps a token
+// (username + hash) and sends it back in the x-l3arn-token header on
+// progress calls. Accounts created before usernames existed (keyed by name
+// only) migrate to the username on first sign-in with a username, and their
+// progress moves with them.
 // AI help: POST /api/ai forwards a study question to Google Gemini
 // (model gemini-3-flash-preview) using the GEMINI_API_KEY secret stored in
 // the Worker environment (server-side only, never in the page). The secret is
@@ -14,7 +19,7 @@
 // Progress shape (per subject, namespaced):
 //   { active:"teamproject", subjects:{ teamproject:{known,quizBest,lastQuiz,notes,streak}, ... },
 //     playlist:[videoId], watchHistory:[{videoId,at}],
-//     profile:{ name, gender:"male"|"female"|null, academicYear:1-4, picture:data:image/jpeg;base64,
+//     profile:{ name, username, age, gender:"male"|"female"|null, academicYear:1-4, picture:data:image/jpeg;base64,
 //              college, course, major (strings, max 80 chars) },
 //     customSubjects:[{id, name, course}] (user-added subjects, max 50) }
 // Each subject value keeps the original flat shape:
@@ -66,6 +71,18 @@ function unb64url(s) {
 
 function normName(name) {
   return String(name || '').trim().toLowerCase().replace(/\s+/g, ' ').slice(0, 40);
+}
+
+// A username is 3 to 30 lowercase letters, digits, or underscores.
+function normUsername(u) {
+  const s = String(u || '').trim().toLowerCase().replace(/[^a-z0-9_]/g, '').slice(0, 30);
+  return s.length >= 3 ? s : null;
+}
+
+function cleanAge(a) {
+  const n = Number(a);
+  if (!Number.isFinite(n)) return null;
+  return Math.max(5, Math.min(120, Math.round(n)));
 }
 
 function validPin(pin) {
@@ -184,9 +201,11 @@ function cleanSubject(p) {
 // at 150,000 characters so one account stays light in KV, or one of the four
 // built-in default avatar paths (assets/avatar-1.png to avatar-4.png).
 function cleanProfile(p) {
-  const d = { name: '', gender: null, academicYear: 1, picture: null, college: '', course: '', major: '' };
+  const d = { name: '', gender: null, academicYear: 1, picture: null, college: '', course: '', major: '', username: '', age: null };
   if (!p || typeof p !== 'object') return d;
   if (typeof p.name === 'string') d.name = p.name.slice(0, 40);
+  if (typeof p.username === 'string') d.username = p.username.slice(0, 40);
+  if (typeof p.age === 'number' && Number.isFinite(p.age)) d.age = Math.max(0, Math.min(120, Math.round(p.age)));
   if (p.gender === 'male' || p.gender === 'female') d.gender = p.gender;
   d.academicYear = numField(p.academicYear, 1, 1, 4);
   if (typeof p.college === 'string') d.college = p.college.slice(0, 80);
@@ -288,17 +307,19 @@ async function authedName(request, env) {
   if (!token || typeof token !== 'string') return null;
   const dot = token.lastIndexOf('.');
   if (dot <= 0) return null;
-  let nameNorm;
-  try { nameNorm = unb64url(token.slice(0, dot)); } catch (e) { return null; }
-  if (!nameNorm || nameNorm !== normName(nameNorm)) return null;
-  const raw = await env.L3ARN_STORE.get('l3arn:account:' + nameNorm);
+  let idNorm;
+  try { idNorm = unb64url(token.slice(0, dot)); } catch (e) { return null; }
+  if (!idNorm) return null;
+  const raw = await env.L3ARN_STORE.get('l3arn:account:' + idNorm);
   if (!raw) return null;
   let acct;
   try { acct = JSON.parse(raw); } catch (e) { return null; }
   if (!acct || typeof acct.pinHash !== 'string') return null;
-  const expect = await sha256Hex(nameNorm + ':' + acct.pinHash);
+  // A username-keyed account must be addressed by its username.
+  if (typeof acct.username === 'string' && acct.username && acct.username !== idNorm) return null;
+  const expect = await sha256Hex(idNorm + ':' + acct.pinHash);
   if (expect !== token.slice(dot + 1)) return null;
-  return nameNorm;
+  return idNorm;
 }
 
 // Simple per-IP rate limit for the AI endpoint: 10 requests per minute.
@@ -343,27 +364,79 @@ export default {
     if (request.method === 'POST' && url.pathname === '/auth') {
       const body = await request.json().catch(() => null);
       const nameNorm = normName(body && body.name);
+      const usernameNorm = normUsername(body && body.username);
       const pin = body && body.pin;
+      const age = cleanAge(body && body.age);
       if (!nameNorm || nameNorm.length < 2) return json({ ok: false, error: 'bad name' }, 400, origin);
+      if (!usernameNorm) return json({ ok: false, error: 'bad username' }, 400, origin);
       if (!validPin(pin)) return json({ ok: false, error: 'bad pin' }, 400, origin);
+      // The PIN hash is derived from the name and PIN (kept name-based so a
+      // legacy account migrates without changing its hash).
       const pinHash = await sha256Hex('l3arn-pin:' + nameNorm + ':' + pin);
-      const key = 'l3arn:account:' + nameNorm;
-      const raw = await env.L3ARN_STORE.get(key);
+      const key = 'l3arn:account:' + usernameNorm;
+      let raw = await env.L3ARN_STORE.get(key);
+      let acct = null;
       if (raw) {
-        let acct;
         try { acct = JSON.parse(raw); } catch (e) { acct = null; }
-        if (!acct || acct.pinHash !== pinHash) {
+      }
+      if (acct && typeof acct.pinHash === 'string') {
+        // Strict three-field check: PIN, name, and username must all match.
+        if (normName(acct.name) !== nameNorm) {
+          return json({ ok: false, error: 'wrong name' }, 401, origin);
+        }
+        if (acct.pinHash !== pinHash) {
           return json({ ok: false, error: 'wrong pin' }, 401, origin);
         }
-      } else {
-        await env.L3ARN_STORE.put(key, JSON.stringify({
-          name: String(body.name).trim().slice(0, 40),
-          pinHash,
-          createdAt: new Date().toISOString(),
-        }));
+        // Fill in the age if the account has none and one was provided.
+        if ((acct.age === null || acct.age === undefined) && age !== null) {
+          acct.age = age;
+          await env.L3ARN_STORE.put(key, JSON.stringify(acct));
+        }
+        const token = b64url(usernameNorm) + '.' + await sha256Hex(usernameNorm + ':' + acct.pinHash);
+        return json({ ok: true, token, name: acct.name, username: usernameNorm, age: acct.age === undefined ? null : acct.age }, 200, origin);
       }
-      const token = b64url(nameNorm) + '.' + await sha256Hex(nameNorm + ':' + pinHash);
-      return json({ ok: true, token, name: String(body.name).trim().slice(0, 40) }, 200, origin);
+      // No username-keyed account. Try the legacy name-keyed account and
+      // migrate it to the username (progress moves with it).
+      const legacyKey = 'l3arn:account:' + nameNorm;
+      let legacyRaw = null;
+      if (legacyKey !== key) legacyRaw = await env.L3ARN_STORE.get(legacyKey);
+      let legacy = null;
+      if (legacyRaw) {
+        try { legacy = JSON.parse(legacyRaw); } catch (e) { legacy = null; }
+      }
+      if (legacy && typeof legacy.pinHash === 'string' && !legacy.username) {
+        if (legacy.pinHash !== pinHash) {
+          return json({ ok: false, error: 'wrong pin' }, 401, origin);
+        }
+        const newAcct = {
+          name: legacy.name,
+          username: usernameNorm,
+          pinHash: legacy.pinHash,
+          age: age !== null ? age : (typeof legacy.age === 'number' ? legacy.age : null),
+          createdAt: legacy.createdAt || new Date().toISOString(),
+          migratedFrom: nameNorm,
+        };
+        await env.L3ARN_STORE.put(key, JSON.stringify(newAcct));
+        const progRaw = await env.L3ARN_STORE.get('l3arn:progress:' + nameNorm);
+        if (progRaw) {
+          await env.L3ARN_STORE.put('l3arn:progress:' + usernameNorm, progRaw);
+          await env.L3ARN_STORE.delete('l3arn:progress:' + nameNorm);
+        }
+        await env.L3ARN_STORE.delete(legacyKey);
+        const token = b64url(usernameNorm) + '.' + await sha256Hex(usernameNorm + ':' + newAcct.pinHash);
+        return json({ ok: true, token, name: newAcct.name, username: usernameNorm, age: newAcct.age, migrated: true }, 200, origin);
+      }
+      // No account at all: create a new one under the username.
+      const newAcct = {
+        name: String(body.name).trim().slice(0, 40),
+        username: usernameNorm,
+        pinHash,
+        age,
+        createdAt: new Date().toISOString(),
+      };
+      await env.L3ARN_STORE.put(key, JSON.stringify(newAcct));
+      const token = b64url(usernameNorm) + '.' + await sha256Hex(usernameNorm + ':' + pinHash);
+      return json({ ok: true, token, name: newAcct.name, username: usernameNorm, age }, 200, origin);
     }
 
     if (request.method === 'GET' && url.pathname === '/progress') {
