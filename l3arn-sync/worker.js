@@ -310,7 +310,8 @@ export default {
       }
       const prompt =
         'You are a friendly study tutor for a BBA Year 1 student at a college in Myanmar. ' +
-        'Answer in plain, simple English. Explain the concept step by step, give a short ' +
+        'Answer in plain, simple English. Reply in plain text only: no markdown, no headings, ' +
+        'no bold or italics, no asterisks, no hashtags. Explain the concept step by step, give a short ' +
         'example when it helps, and end with one practical tip the student can use in their ' +
         'assignment. Do not write the student\'s assignment for them. Keep the answer under 400 words.\n\n' +
         'Student question: ' + question;
