@@ -4,6 +4,13 @@
 // Auth: a display name plus a 4-digit PIN. Only a SHA-256 hash of the PIN is
 // stored, never the PIN itself. The client keeps a token (name + hash) and
 // sends it back in the x-l3arn-token header on progress calls.
+// AI help: POST /api/ai forwards a study question to Google Gemini
+// (model gemini-3-flash-preview) using the GEMINI_API_KEY secret stored in
+// the Worker environment (server-side only, never in the page). The secret is
+// NOT set yet; when it is missing the endpoint answers { ok:false,
+// error:"not_configured" } so the app shows a clear "not set up yet" message.
+// A { status:true } body only checks whether the key is configured, and never
+// calls Gemini. Rate limited to 10 questions per minute per IP.
 // Progress shape (per subject, namespaced):
 //   { active:"teamproject", subjects:{ teamproject:{known,quizBest,lastQuiz,notes,streak}, ... },
 //     playlist:[videoId], watchHistory:[{videoId,at}],
@@ -197,6 +204,19 @@ async function authedName(request, env) {
   return nameNorm;
 }
 
+// Simple per-IP rate limit for the AI endpoint: 10 requests per minute.
+// Kept in memory per isolate; the map is capped so it cannot grow forever.
+const AI_RATE = new Map();
+function aiRateLimited(ip) {
+  const now = Date.now();
+  const recent = (AI_RATE.get(ip) || []).filter((ts) => now - ts < 60000);
+  if (recent.length >= 10) return true;
+  recent.push(now);
+  AI_RATE.set(ip, recent);
+  if (AI_RATE.size > 5000) AI_RATE.clear();
+  return false;
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -262,6 +282,67 @@ export default {
       await env.L3ARN_STORE.delete('l3arn:account:' + nameNorm);
       await env.L3ARN_STORE.delete('l3arn:progress:' + nameNorm);
       return json({ ok: true }, 200, origin);
+    }
+
+    if (url.pathname === '/api/ai') {
+      if (request.method !== 'POST') {
+        return json({ ok: false, error: 'method not allowed' }, 405, origin);
+      }
+      const body = await request.json().catch(() => null);
+      const apiKey = (env.GEMINI_API_KEY || '').trim();
+      // Config probe: never calls Gemini, only reports whether the key exists.
+      if (body && body.status === true) {
+        return json({ ok: true, configured: apiKey.length > 0 }, 200, origin);
+      }
+      if (!apiKey) {
+        return json({ ok: false, error: 'not_configured' }, 200, origin);
+      }
+      const question = body && typeof body.question === 'string' ? body.question.trim() : '';
+      if (!question) {
+        return json({ ok: false, error: 'empty question' }, 400, origin);
+      }
+      if (question.length > 2000) {
+        return json({ ok: false, error: 'question too long' }, 400, origin);
+      }
+      const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+      if (aiRateLimited(ip)) {
+        return json({ ok: false, error: 'rate_limited' }, 429, origin);
+      }
+      const prompt =
+        'You are a friendly study tutor for a BBA Year 1 student at a college in Myanmar. ' +
+        'Answer in plain, simple English. Explain the concept step by step, give a short ' +
+        'example when it helps, and end with one practical tip the student can use in their ' +
+        'assignment. Do not write the student\'s assignment for them. Keep the answer under 400 words.\n\n' +
+        'Student question: ' + question;
+      let res;
+      try {
+        res = await fetch(
+          'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent',
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: prompt }] }],
+              generationConfig: { maxOutputTokens: 1024, temperature: 0.7 },
+            }),
+          }
+        );
+      } catch (e) {
+        return json({ ok: false, error: 'upstream' }, 502, origin);
+      }
+      if (!res.ok) {
+        return json({ ok: false, error: 'upstream' }, 502, origin);
+      }
+      const data = await res.json().catch(() => null);
+      let answer = '';
+      try {
+        const parts = data && data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts;
+        if (Array.isArray(parts)) answer = parts.map((p) => p.text || '').join('');
+      } catch (e) { answer = ''; }
+      if (!answer) {
+        return json({ ok: false, error: 'upstream' }, 502, origin);
+      }
+      return json({ ok: true, answer: answer.slice(0, 8000) }, 200, origin);
     }
 
     return json({ ok: false, error: 'unknown endpoint' }, 404, origin);
