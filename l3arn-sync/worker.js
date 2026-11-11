@@ -144,14 +144,16 @@ function cleanSubject(p) {
 
 // Clean and validate the profile object. Unknown fields are dropped.
 // The picture is a small client-side resized JPEG data URL (200x200), capped
-// at 150,000 characters so one account stays light in KV.
+// at 150,000 characters so one account stays light in KV, or one of the four
+// built-in default avatar paths (assets/avatar-1.png to avatar-4.png).
 function cleanProfile(p) {
   const d = { name: '', gender: null, academicYear: 1, picture: null };
   if (!p || typeof p !== 'object') return d;
   if (typeof p.name === 'string') d.name = p.name.slice(0, 40);
   if (p.gender === 'male' || p.gender === 'female') d.gender = p.gender;
   d.academicYear = numField(p.academicYear, 1, 1, 4);
-  if (typeof p.picture === 'string' && p.picture.startsWith('data:image/') && p.picture.length <= 150000) {
+  if (typeof p.picture === 'string' && p.picture.length <= 150000 &&
+      (p.picture.startsWith('data:image/') || /^assets\/avatar-[1-4]\.png$/.test(p.picture))) {
     d.picture = p.picture;
   }
   return d;
