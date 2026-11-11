@@ -19,7 +19,8 @@
 // Progress shape (per subject, namespaced):
 //   { active:"teamproject", subjects:{ teamproject:{known,quizBest,lastQuiz,notes,streak}, ... },
 //     playlist:[videoId], watchHistory:[{videoId,at}],
-//     profile:{ name, username, age, gender:"male"|"female"|null, academicYear:1-4, picture:data:image/jpeg;base64,
+//     profile:{ name, username, age, birthday:"YYYY-MM-DD"|null, bio (max 120 chars),
+//              gender:"male"|"female"|null, academicYear:1-4, picture:data:image/jpeg;base64,
 //              college, course, major (strings, max 80 chars) },
 //     customSubjects:[{id, name, course}] (user-added subjects, max 50) }
 // Each subject value keeps the original flat shape:
@@ -201,11 +202,19 @@ function cleanSubject(p) {
 // at 150,000 characters so one account stays light in KV, or one of the four
 // built-in default avatar paths (assets/avatar-1.png to avatar-4.png).
 function cleanProfile(p) {
-  const d = { name: '', gender: null, academicYear: 1, picture: null, college: '', course: '', major: '', username: '', age: null };
+  const d = { name: '', gender: null, academicYear: 1, picture: null, college: '', course: '', major: '', username: '', age: null, birthday: null, bio: '' };
   if (!p || typeof p !== 'object') return d;
   if (typeof p.name === 'string') d.name = p.name.slice(0, 40);
   if (typeof p.username === 'string') d.username = p.username.slice(0, 40);
   if (typeof p.age === 'number' && Number.isFinite(p.age)) d.age = Math.max(0, Math.min(120, Math.round(p.age)));
+  if (typeof p.birthday === 'string') {
+    const b = p.birthday.slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(b)) {
+      const dt = new Date(b + 'T00:00:00Z');
+      if (!Number.isNaN(dt.getTime()) && dt.toISOString().slice(0, 10) === b) d.birthday = b;
+    }
+  }
+  if (typeof p.bio === 'string') d.bio = p.bio.slice(0, 120);
   if (p.gender === 'male' || p.gender === 'female') d.gender = p.gender;
   d.academicYear = numField(p.academicYear, 1, 1, 4);
   if (typeof p.college === 'string') d.college = p.college.slice(0, 80);
