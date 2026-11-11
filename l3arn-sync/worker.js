@@ -14,7 +14,9 @@
 // Progress shape (per subject, namespaced):
 //   { active:"teamproject", subjects:{ teamproject:{known,quizBest,lastQuiz,notes,streak}, ... },
 //     playlist:[videoId], watchHistory:[{videoId,at}],
-//     profile:{ name, gender:"male"|"female"|null, academicYear:1-4, picture:data:image/jpeg;base64 } }
+//     profile:{ name, gender:"male"|"female"|null, academicYear:1-4, picture:data:image/jpeg;base64,
+//              college, course, major (strings, max 80 chars) },
+//     customSubjects:[{id, name, course}] (user-added subjects, max 50) }
 // Each subject value keeps the original flat shape:
 //   {known:{cardIndex:true}, quizBest:{score,total},
 //    lastQuiz:{score,total,at}, notes:[note], streak:{count,lastDay}}
@@ -147,11 +149,14 @@ function cleanSubject(p) {
 // at 150,000 characters so one account stays light in KV, or one of the four
 // built-in default avatar paths (assets/avatar-1.png to avatar-4.png).
 function cleanProfile(p) {
-  const d = { name: '', gender: null, academicYear: 1, picture: null };
+  const d = { name: '', gender: null, academicYear: 1, picture: null, college: '', course: '', major: '' };
   if (!p || typeof p !== 'object') return d;
   if (typeof p.name === 'string') d.name = p.name.slice(0, 40);
   if (p.gender === 'male' || p.gender === 'female') d.gender = p.gender;
   d.academicYear = numField(p.academicYear, 1, 1, 4);
+  if (typeof p.college === 'string') d.college = p.college.slice(0, 80);
+  if (typeof p.course === 'string') d.course = p.course.slice(0, 80);
+  if (typeof p.major === 'string') d.major = p.major.slice(0, 80);
   if (typeof p.picture === 'string' && p.picture.length <= 150000 &&
       (p.picture.startsWith('data:image/') || /^assets\/avatar-[1-4]\.png$/.test(p.picture))) {
     d.picture = p.picture;
@@ -186,20 +191,50 @@ function cleanHistory(h) {
   return out;
 }
 
+// Clean the custom-subject registry: [{id, name, course}], max 50.
+// Ids are client-generated (c-<slug>-<4 chars>) and must be well-formed.
+function cleanCustomSubjects(v) {
+  if (!Array.isArray(v)) return [];
+  const out = [];
+  const seen = new Set();
+  for (const s of v.slice(0, 50)) {
+    if (!s || typeof s !== 'object') continue;
+    if (typeof s.id !== 'string' || !/^[a-z0-9][a-z0-9-]{0,59}$/.test(s.id) || seen.has(s.id)) continue;
+    seen.add(s.id);
+    out.push({
+      id: s.id,
+      name: typeof s.name === 'string' ? s.name.slice(0, 80) : '',
+      course: typeof s.course === 'string' ? s.course.slice(0, 80) : '',
+    });
+  }
+  return out;
+}
+
 // Clean and validate the whole per-subject store. Unknown fields are dropped.
+// Besides the four built-in subjects, any extra subject id that is well-formed
+// (lowercase letters, digits, hyphens, max 60 chars) is accepted, so preset
+// catalog subjects and user-added custom subjects sync too (max 60 total).
 function cleanProgress(p) {
   if (!p || typeof p !== 'object') {
     const subjects = {};
     for (const id of SUBJECT_IDS) subjects[id] = emptySubjectProgress();
-    return { active: 'teamproject', subjects, playlist: [], watchHistory: [], profile: cleanProfile(null) };
+    return { active: 'teamproject', subjects, customSubjects: [], playlist: [], watchHistory: [], profile: cleanProfile(null) };
   }
   if (p.subjects && typeof p.subjects === 'object') {
     const subjects = {};
     for (const id of SUBJECT_IDS) subjects[id] = cleanSubject(p.subjects[id]);
+    let extra = 0;
+    for (const id of Object.keys(p.subjects)) {
+      if (subjects[id] || extra >= 56) continue;
+      if (!/^[a-z0-9][a-z0-9-]{0,59}$/.test(id)) continue;
+      subjects[id] = cleanSubject(p.subjects[id]);
+      extra++;
+    }
     const active = typeof p.active === 'string' && subjects[p.active] ? p.active : 'teamproject';
     return {
       active,
       subjects,
+      customSubjects: cleanCustomSubjects(p.customSubjects),
       playlist: cleanVideoList(p.playlist),
       watchHistory: cleanHistory(p.watchHistory),
       profile: cleanProfile(p.profile),
@@ -209,7 +244,7 @@ function cleanProgress(p) {
   const subjects = {};
   for (const id of SUBJECT_IDS) subjects[id] = emptySubjectProgress();
   subjects.teamproject = cleanSubject(p);
-  return { active: 'teamproject', subjects, playlist: [], watchHistory: [], profile: cleanProfile(null) };
+  return { active: 'teamproject', subjects, customSubjects: [], playlist: [], watchHistory: [], profile: cleanProfile(null) };
 }
 
 // Verify the token and return the normalized account name, or null.
