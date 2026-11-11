@@ -4,8 +4,12 @@
 // Auth: a display name plus a 4-digit PIN. Only a SHA-256 hash of the PIN is
 // stored, never the PIN itself. The client keeps a token (name + hash) and
 // sends it back in the x-l3arn-token header on progress calls.
-// Progress shape: {known:{cardIndex:true}, quizBest:{score,total},
-//   lastQuiz:{score,total,at}, notes:[{id,text,at}], streak:{count,lastDay}}
+// Progress shape (per subject, namespaced):
+//   { active:"teamproject", subjects:{ teamproject:{known,quizBest,lastQuiz,notes,streak}, ... } }
+// Each subject value keeps the original flat shape:
+//   {known:{cardIndex:true}, quizBest:{score,total},
+//    lastQuiz:{score,total,at}, notes:[{id,text,at}], streak:{count,lastDay}}
+// Backward compatible: a flat old-shape object is treated as Unit 8 (teamproject) progress.
 
 const ALLOWED_ORIGINS = ['https://vincenthenry21.github.io', 'https://muse.ai'];
 
@@ -55,8 +59,14 @@ function numField(v, def, min, max) {
   return Math.max(min, Math.min(max, Math.round(n)));
 }
 
-// Clean and validate a progress object. Unknown fields are dropped.
-function cleanProgress(p) {
+const SUBJECT_IDS = ['teamproject', 'entrepreneurship', 'marketing', 'finance'];
+
+function emptySubjectProgress() {
+  return { known: {}, quizBest: null, lastQuiz: null, notes: [], streak: { count: 0, lastDay: null } };
+}
+
+// Clean and validate one subject's progress object. Unknown fields are dropped.
+function cleanSubject(p) {
   if (!p || typeof p !== 'object') return { known: {}, quizBest: null, lastQuiz: null, notes: [], streak: { count: 0, lastDay: null } };
   const known = {};
   if (p.known && typeof p.known === 'object') {
@@ -96,6 +106,26 @@ function cleanProgress(p) {
     };
   }
   return { known, quizBest, lastQuiz, notes, streak };
+}
+
+// Clean and validate the whole per-subject store. Unknown fields are dropped.
+function cleanProgress(p) {
+  if (!p || typeof p !== 'object') {
+    const subjects = {};
+    for (const id of SUBJECT_IDS) subjects[id] = emptySubjectProgress();
+    return { active: 'teamproject', subjects };
+  }
+  if (p.subjects && typeof p.subjects === 'object') {
+    const subjects = {};
+    for (const id of SUBJECT_IDS) subjects[id] = cleanSubject(p.subjects[id]);
+    const active = typeof p.active === 'string' && subjects[p.active] ? p.active : 'teamproject';
+    return { active, subjects };
+  }
+  // Old flat shape: it is Unit 8's progress.
+  const subjects = {};
+  for (const id of SUBJECT_IDS) subjects[id] = emptySubjectProgress();
+  subjects.teamproject = cleanSubject(p);
+  return { active: 'teamproject', subjects };
 }
 
 // Verify the token and return the normalized account name, or null.
